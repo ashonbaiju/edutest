@@ -218,6 +218,21 @@ switch ($action) {
 
         if (move_uploaded_file($_FILES['recording']['tmp_name'], $filepath)) {
             $size = filesize($filepath);
+
+            // Clean up any older fragmented recordings for this class to ensure one single class recording
+            $oldRecs = $conn->query("SELECT id, file_path FROM recordings WHERE class_id=$class_id");
+            if ($oldRecs && $oldRecs->num_rows > 0) {
+                while ($old = $oldRecs->fetch_assoc()) {
+                    if ($old['file_path'] !== $db_path) {
+                        $oldFile = __DIR__ . '/../' . $old['file_path'];
+                        if (file_exists($oldFile)) {
+                            @unlink($oldFile);
+                        }
+                    }
+                }
+                $conn->query("DELETE FROM recordings WHERE class_id=$class_id");
+            }
+
             $conn->query("INSERT INTO recordings (class_id, file_path, file_size) VALUES ($class_id, '$db_path', $size)");
             // Update live_classes recording_url
             $conn->query("UPDATE live_classes SET recording_url='$db_path' WHERE id=$class_id");

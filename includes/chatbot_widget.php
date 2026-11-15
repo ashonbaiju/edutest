@@ -1,756 +1,743 @@
 <?php
 /**
- * EduBot Chat Widget - Include this in any page to show the AI assistant
- * Usage: require_once __DIR__ . '/includes/chatbot_widget.php'; echo $chatbotWidget;
+ * EduBot AI Assistant Widget - EduSys
+ * Interactive floating AI chatbot widget powered by Groq
  */
 
+if (!defined('BASE_URL')) {
+    require_once __DIR__ . '/../config/db.php';
+}
+
+$widgetBaseUrl = defined('BASE_URL') ? BASE_URL : '/edu/project/';
+$currentRole = $_SESSION['role'] ?? 'guest';
+$currentUserName = $_SESSION['name'] ?? 'Guest';
+
+// Quick suggestions tailored to role
+$suggestions = [];
+if ($currentRole === 'teacher') {
+    $suggestions = [
+        "How do I start a live class?",
+        "How to grade assignments?",
+        "Suggest a quick 5-question math quiz",
+        "How are class recordings saved?"
+    ];
+} elseif ($currentRole === 'student') {
+    $suggestions = [
+        "Explain Newton's Second Law with formula",
+        "How do I join my live class?",
+        "Where can I find recorded classes?",
+        "How to submit my assignment?"
+    ];
+} elseif ($currentRole === 'parent') {
+    $suggestions = [
+        "How to check child's attendance?",
+        "Where can I view exam results?",
+        "How do I schedule a PTM?",
+        "How to view fee status?"
+    ];
+} else {
+    $suggestions = [
+        "What is EduSys and how does it work?",
+        "How to find a private tutor?",
+        "How do live classes work?",
+        "Explain photosynthesis in simple terms"
+    ];
+}
+
+$suggestionsAttr = htmlspecialchars(json_encode($suggestions), ENT_QUOTES, 'UTF-8');
+$apiAttr = htmlspecialchars($widgetBaseUrl . 'php/chatbot_api.php', ENT_QUOTES, 'UTF-8');
+$currentNameEscaped = htmlspecialchars($currentUserName, ENT_QUOTES, 'UTF-8');
+
 $chatbotWidget = <<<HTML
-<!-- EduBot Chat Widget -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<!-- EduBot AI Assistant Floating Widget -->
 <style>
-/* Chat Widget Styles */
 :root {
-    --chat-primary: #6c63ff;
-    --chat-primary-hover: #5a52e0;
-    --chat-bg: #ffffff;
-    --chat-text: #2d3748;
-    --chat-text-secondary: #718096;
-    --chat-border: #e2e8f0;
-    --chat-user-bubble: #6c63ff;
-    --chat-bot-bubble: #f1f5f9;
-    --chat-input-bg: #f8fafc;
+    --edubot-primary: #6366f1;
+    --edubot-primary-hover: #4f46e5;
+    --edubot-secondary: #8b5cf6;
+    --edubot-accent: #06b6d4;
+    --edubot-bg: #ffffff;
+    --edubot-surface: #f8fafc;
+    --edubot-border: #e2e8f0;
+    --edubot-text: #1e293b;
+    --edubot-text-muted: #64748b;
+    --edubot-bot-bubble: #f1f5f9;
+    --edubot-bot-text: #1e293b;
+    --edubot-user-bubble: linear-gradient(135deg, #6366f1, #8b5cf6);
+    --edubot-shadow: 0 20px 45px -10px rgba(99, 102, 241, 0.25), 0 10px 20px -5px rgba(0, 0, 0, 0.08);
 }
 
 [data-theme="dark"] {
-    --chat-bg: #1e2235;
-    --chat-text: #e2e8f0;
-    --chat-text-secondary: #a0aec0;
-    --chat-border: #2d3748;
-    --chat-bot-bubble: #2d3748;
-    --chat-input-bg: #22263a;
+    --edubot-bg: #0f172a;
+    --edubot-surface: #1e293b;
+    --edubot-border: #334155;
+    --edubot-text: #f1f5f9;
+    --edubot-text-muted: #94a3b8;
+    --edubot-bot-bubble: #1e293b;
+    --edubot-bot-text: #f1f5f9;
+    --edubot-shadow: 0 20px 45px -10px rgba(0, 0, 0, 0.6);
 }
 
-.edubot-toggle {
+/* Floating Launcher Button */
+.edubot-launcher {
     position: fixed;
     bottom: 24px;
     right: 24px;
     width: 60px;
     height: 60px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--chat-primary), #8b5cf6);
+    background: linear-gradient(135deg, var(--edubot-primary), var(--edubot-secondary));
     border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 8px 32px rgba(108, 99, 255, 0.4);
-    z-index: 9999;
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
-    animation: pulse 2s infinite;
+    color: #ffffff;
+    box-shadow: 0 10px 25px rgba(99, 102, 241, 0.45);
+    z-index: 999999;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    outline: none;
 }
 
-.edubot-toggle:hover {
-    transform: scale(1.1);
-    box-shadow: 0 12px 40px rgba(108, 99, 255, 0.5);
+.edubot-launcher:hover {
+    transform: scale(1.08) translateY(-2px);
+    box-shadow: 0 16px 32px rgba(99, 102, 241, 0.55);
 }
 
-.edubot-toggle:active {
+.edubot-launcher:active {
     transform: scale(0.95);
 }
 
-.edubot-toggle svg {
-    width: 28px;
-    height: 28px;
-    color: white;
-    stroke-width: 2.5;
-}
-
-.edubot-toggle .notification-badge {
+.edubot-launcher-icon,
+.edubot-launcher-close {
     position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: #ff5f5f;
-    color: white;
-    font-size: 11px;
-    font-weight: 700;
     display: flex;
     align-items: center;
     justify-content: center;
-    opacity: 0;
-    transform: scale(0);
-    transition: opacity 0.3s, transform 0.3s;
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
 }
 
-.edubot-toggle.has-notification .notification-badge {
+.edubot-launcher-icon {
     opacity: 1;
-    transform: scale(1);
+    transform: rotate(0deg) scale(1);
 }
 
-@keyframes pulse {
-    0%, 100% { box-shadow: 0 8px 32px rgba(108, 99, 255, 0.4); }
-    50% { box-shadow: 0 8px 32px rgba(108, 99, 255, 0.6), 0 0 0 8px rgba(108, 99, 255, 0.1); }
+.edubot-launcher-close {
+    opacity: 0;
+    transform: rotate(-90deg) scale(0.5);
 }
 
-.edubot-window {
-    position: fixed;
-    bottom: 100px;
-    right: 24px;
-    width: 380px;
-    height: 550px;
-    max-height: 80vh;
-    background: var(--chat-bg);
+.edubot-launcher.is-active .edubot-launcher-icon {
+    opacity: 0;
+    transform: rotate(90deg) scale(0.5);
+}
+
+.edubot-launcher.is-active .edubot-launcher-close {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+}
+
+.edubot-launcher-pulse {
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.4) 0%, rgba(99, 102, 241, 0) 70%);
+    animation: edubotPulse 3s infinite ease-out;
+    pointer-events: none;
+    z-index: -1;
+}
+
+@keyframes edubotPulse {
+    0% { transform: scale(0.95); opacity: 0.8; }
+    50% { transform: scale(1.25); opacity: 0; }
+    100% { transform: scale(1.25); opacity: 0; }
+}
+
+.edubot-launcher-tooltip {
+    position: absolute;
+    right: 72px;
+    background: #1e293b;
+    color: #ffffff;
+    padding: 6px 12px;
     border-radius: 20px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--chat-border);
-    display: none;
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateX(10px);
+    pointer-events: none;
+    transition: all 0.25s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    font-family: inherit;
+}
+
+.edubot-launcher:hover .edubot-launcher-tooltip {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+/* Chatbot Popup Window */
+.edubot-container {
+    position: fixed;
+    bottom: 96px;
+    right: 24px;
+    width: 390px;
+    max-width: calc(100vw - 32px);
+    height: 580px;
+    max-height: calc(100vh - 120px);
+    background: var(--edubot-bg);
+    border-radius: 20px;
+    border: 1px solid var(--edubot-border);
+    box-shadow: var(--edubot-shadow);
+    display: flex;
     flex-direction: column;
     overflow: hidden;
-    z-index: 9998;
-    transform: translateY(20px) scale(0.95);
+    z-index: 999998;
+    transform: translateY(24px) scale(0.92);
     opacity: 0;
-    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease, visibility 0.25s;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Outfit", sans-serif;
 }
 
-.edubot-window.open {
-    display: flex;
+.edubot-container.is-open {
     transform: translateY(0) scale(1);
     opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
 }
 
+/* Header */
 .edubot-header {
+    background: linear-gradient(135deg, var(--edubot-primary), var(--edubot-secondary));
+    color: #ffffff;
+    padding: 14px 18px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px;
-    background: linear-gradient(135deg, var(--chat-primary), #8b5cf6);
-    color: white;
-    border-radius: 20px 20px 0 0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
 }
 
-.edubot-header-info {
+.edubot-header-profile {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
 }
 
-.edubot-avatar {
-    width: 44px;
-    height: 44px;
+.edubot-avatar-wrap {
+    position: relative;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.2);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
 
-.edubot-header-text h3 {
+.edubot-avatar-wrap svg {
+    width: 22px;
+    height: 22px;
+    color: #ffffff;
+}
+
+.edubot-status-indicator {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 11px;
+    height: 11px;
+    background: #10b981;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+}
+
+.edubot-header-details h4 {
     margin: 0;
-    font-size: 1rem;
+    font-size: 0.95rem;
     font-weight: 700;
+    letter-spacing: -0.2px;
+    color: #ffffff;
 }
 
-.edubot-header-text span {
-    font-size: 0.75rem;
+.edubot-header-details p {
+    margin: 2px 0 0;
+    font-size: 0.72rem;
     opacity: 0.9;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.edubot-header-actions {
     display: flex;
     align-items: center;
     gap: 6px;
 }
 
-.edubot-status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #4ade80;
-    animation: blink 2s infinite;
-}
-
-@keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
-
-.edubot-close {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
+.edubot-action-btn {
     background: rgba(255, 255, 255, 0.15);
     border: none;
-    color: white;
+    color: #ffffff;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.2s;
+    transition: background 0.2s, transform 0.2s;
 }
 
-.edubot-close:hover {
+.edubot-action-btn:hover {
     background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
 }
 
+/* Chat Messages Viewport */
 .edubot-messages {
     flex: 1;
     overflow-y: auto;
-    padding: 20px;
+    padding: 16px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    background: var(--chat-bg);
+    gap: 14px;
+    background: var(--edubot-bg);
+    scroll-behavior: smooth;
 }
 
-.edubot-message {
+.edubot-messages::-webkit-scrollbar {
+    width: 6px;
+}
+.edubot-messages::-webkit-scrollbar-thumb {
+    background: var(--edubot-border);
+    border-radius: 4px;
+}
+
+/* Welcome Card & Suggestions */
+.edubot-welcome {
+    background: var(--edubot-surface);
+    border: 1px solid var(--edubot-border);
+    border-radius: 14px;
+    padding: 14px;
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.edubot-welcome-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(99, 102, 241, 0.12);
+    color: var(--edubot-primary);
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.edubot-welcome h5 {
+    margin: 4px 0 6px;
+    font-size: 0.95rem;
+    color: var(--edubot-text);
+}
+
+.edubot-welcome p {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--edubot-text-muted);
+    line-height: 1.4;
+}
+
+.edubot-suggestions {
     display: flex;
-    gap: 10px;
-    max-width: 85%;
-    animation: slideIn 0.3s ease;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
 }
 
-@keyframes slideIn {
-    from { opacity: 0; transform: translateY(10px); }
+.edubot-chip {
+    background: var(--edubot-bg);
+    border: 1px solid var(--edubot-border);
+    color: var(--edubot-text);
+    padding: 7px 12px;
+    border-radius: 12px;
+    font-size: 0.76rem;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.edubot-chip:hover {
+    border-color: var(--edubot-primary);
+    background: rgba(99, 102, 241, 0.05);
+    color: var(--edubot-primary);
+    transform: translateX(3px);
+}
+
+.edubot-chip svg {
+    width: 14px;
+    height: 14px;
+    color: var(--edubot-primary);
+    flex-shrink: 0;
+}
+
+/* Message Rows */
+.edubot-msg-row {
+    display: flex;
+    gap: 8px;
+    max-width: 88%;
+    animation: edubotFadeIn 0.25s ease-out;
+}
+
+@keyframes edubotFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
-.edubot-message.bot {
-    align-self: flex-start;
-}
-
-.edubot-message.user {
+.edubot-msg-row.user {
     align-self: flex-end;
     flex-direction: row-reverse;
 }
 
-.edubot-message-avatar {
-    width: 32px;
-    height: 32px;
+.edubot-msg-row.bot {
+    align-self: flex-start;
+}
+
+.edubot-msg-avatar {
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
     flex-shrink: 0;
+    font-size: 0.75rem;
 }
 
-.edubot-message.bot .edubot-message-avatar {
-    background: var(--chat-primary);
-    color: white;
+.edubot-msg-row.bot .edubot-msg-avatar {
+    background: linear-gradient(135deg, var(--edubot-primary), var(--edubot-secondary));
+    color: #ffffff;
 }
 
-.edubot-message.user .edubot-message-avatar {
-    background: var(--chat-text-secondary);
-    color: white;
+.edubot-msg-row.user .edubot-msg-avatar {
+    background: #cbd5e1;
+    color: #1e293b;
 }
 
-.edubot-message-content {
-    background: var(--chat-bot-bubble);
+.edubot-msg-bubble {
+    padding: 10px 14px;
     border-radius: 16px;
-    padding: 12px 16px;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     line-height: 1.5;
-    color: var(--chat-text);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    word-break: break-word;
 }
 
-.edubot-message.user .edubot-message-content {
-    background: var(--chat-user-bubble);
-    color: white;
-    border-radius: 16px 16px 4px 16px;
+.edubot-msg-row.user .edubot-msg-bubble {
+    background: var(--edubot-user-bubble);
+    color: #ffffff;
+    border-bottom-right-radius: 4px;
 }
 
-.edubot-message.bot .edubot-message-content {
-    border-radius: 16px 16px 16px 4px;
+.edubot-msg-row.bot .edubot-msg-bubble {
+    background: var(--edubot-bot-bubble);
+    color: var(--edubot-bot-text);
+    border-bottom-left-radius: 4px;
+    border: 1px solid var(--edubot-border);
 }
 
-.edubot-typing {
+/* Markdown styling inside bot bubble */
+.edubot-msg-bubble p {
+    margin: 0 0 6px;
+}
+.edubot-msg-bubble p:last-child {
+    margin-bottom: 0;
+}
+.edubot-msg-bubble strong {
+    font-weight: 700;
+}
+.edubot-msg-bubble ul, .edubot-msg-bubble ol {
+    margin: 4px 0 6px 18px;
+    padding: 0;
+}
+.edubot-msg-bubble li {
+    margin-bottom: 3px;
+}
+.edubot-msg-bubble code {
+    background: rgba(0, 0, 0, 0.08);
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-family: monospace;
+}
+.edubot-msg-bubble pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    margin: 6px 0;
+}
+.edubot-msg-bubble pre code {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+}
+
+/* Typing Indicator */
+.edubot-typing-indicator {
     display: none;
     align-items: center;
-    gap: 4px;
-    padding: 8px 16px;
-    color: var(--chat-text-secondary);
-    font-size: 0.85rem;
-}
-
-.edubot-typing.show {
-    display: flex;
-}
-
-.edubot-typing-dots {
-    display: flex;
-    gap: 3px;
-}
-
-.edubot-typing-dots span {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--chat-primary);
-    animation: typing 1.4s infinite ease-in-out;
-}
-
-.edubot-typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-.edubot-typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes typing {
-    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-    30% { transform: translateY(-6px); opacity: 1; }
-}
-
-.edubot-input-area {
-    padding: 16px 20px;
-    border-top: 1px solid var(--chat-border);
-    background: var(--chat-bg);
-    border-radius: 0 0 20px 20px;
-}
-
-.edubot-quick-actions {
-    display: flex;
     gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 12px;
+    padding: 4px 8px;
 }
 
-.edubot-quick-btn {
-    padding: 6px 12px;
-    border-radius: 16px;
-    border: 1px solid var(--chat-border);
-    background: var(--chat-input-bg);
-    color: var(--chat-text-secondary);
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.edubot-quick-btn:hover {
-    border-color: var(--chat-primary);
-    color: var(--chat-primary);
-    background: rgba(108, 99, 255, 0.1);
-}
-
-.edubot-input-row {
+.edubot-typing-indicator.active {
     display: flex;
-    gap: 10px;
+}
+
+.edubot-dots {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--edubot-bot-bubble);
+    padding: 8px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--edubot-border);
+}
+
+.edubot-dots span {
+    width: 6px;
+    height: 6px;
+    background: var(--edubot-primary);
+    border-radius: 50%;
+    animation: edubotBounce 1.4s infinite ease-in-out both;
+}
+
+.edubot-dots span:nth-child(1) { animation-delay: -0.32s; }
+.edubot-dots span:nth-child(2) { animation-delay: -0.16s; }
+.edubot-dots span:nth-child(3) { animation-delay: 0s; }
+
+@keyframes edubotBounce {
+    0%, 80%, 100% { transform: scale(0); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+.edubot-typing-label {
+    font-size: 0.72rem;
+    color: var(--edubot-text-muted);
+}
+
+/* Input Bar */
+.edubot-input-container {
+    padding: 12px 14px 10px;
+    border-top: 1px solid var(--edubot-border);
+    background: var(--edubot-surface);
+}
+
+.edubot-input-box {
+    display: flex;
     align-items: flex-end;
-}
-
-.edubot-input-wrapper {
-    flex: 1;
-    position: relative;
-}
-
-.edubot-input {
-    width: 100%;
-    padding: 12px 48px 12px 16px;
-    border-radius: 24px;
-    border: 1px solid var(--chat-border);
-    background: var(--chat-input-bg);
-    color: var(--chat-text);
-    font-size: 0.9rem;
-    font-family: inherit;
-    outline: none;
-    resize: none;
-    min-height: 48px;
-    max-height: 120px;
+    gap: 8px;
+    background: var(--edubot-bg);
+    border: 1px solid var(--edubot-border);
+    border-radius: 20px;
+    padding: 6px 8px 6px 14px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.edubot-input:focus {
-    border-color: var(--chat-primary);
-    box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.15);
+.edubot-input-box:focus-within {
+    border-color: var(--edubot-primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
 }
 
-.edubot-send {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: var(--chat-primary);
+.edubot-textarea {
+    flex: 1;
     border: none;
-    color: white;
+    background: transparent;
+    color: var(--edubot-text);
+    font-size: 0.85rem;
+    font-family: inherit;
+    resize: none;
+    outline: none;
+    max-height: 90px;
+    min-height: 22px;
+    line-height: 1.4;
+    padding: 4px 0;
+}
+
+.edubot-send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--edubot-primary);
+    border: none;
+    color: #ffffff;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.2s, background 0.2s;
     flex-shrink: 0;
+    transition: background 0.2s, transform 0.15s;
+    outline: none;
 }
 
-.edubot-send:hover {
+.edubot-send-btn:hover {
+    background: var(--edubot-primary-hover);
     transform: scale(1.05);
-    background: var(--chat-primary-hover);
 }
 
-.edubot-send:disabled {
+.edubot-send-btn:active {
+    transform: scale(0.92);
+}
+
+.edubot-send-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
     transform: none;
 }
 
-.edubot-send svg {
-    width: 20px;
-    height: 20px;
-}
-
-.edubot-empty-state {
+.edubot-footer-meta {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 0.68rem;
+    color: var(--edubot-text-muted);
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    height: 100%;
-    color: var(--chat-text-secondary);
-    text-align: center;
-    padding: 20px;
+    gap: 5px;
 }
 
-.edubot-empty-state svg {
-    width: 64px;
-    height: 64px;
-    margin-bottom: 16px;
-    opacity: 0.5;
-}
-
-.edubot-empty-state h4 {
-    margin: 0 0 8px;
-    font-size: 1rem;
-}
-
-.edubot-empty-state p {
-    margin: 0;
-    font-size: 0.85rem;
-    line-height: 1.5;
+.edubot-footer-meta span {
+    font-weight: 600;
+    color: var(--edubot-primary);
 }
 
 /* Mobile responsive */
 @media (max-width: 480px) {
-    .edubot-window {
-        width: calc(100vw - 32px);
-        height: calc(100vh - 120px);
-        max-height: 70vh;
-        bottom: 90px;
-        right: 16px;
-        border-radius: 16px;
-    }
-    .edubot-toggle {
+    .edubot-launcher {
         bottom: 16px;
         right: 16px;
-        width: 56px;
-        height: 56px;
+        width: 54px;
+        height: 54px;
+    }
+    .edubot-container {
+        bottom: 80px;
+        right: 12px;
+        left: 12px;
+        width: auto;
+        height: calc(100vh - 100px);
+        max-height: 560px;
+        border-radius: 18px;
     }
 }
 </style>
 
-<!-- Chat Toggle Button -->
-<button class="edubot-toggle" id="edubotToggle" aria-label="Open EduBot Assistant">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-    </svg>
-    <span class="notification-badge" id="edubotBadge">1</span>
+<!-- Floating Launcher Button -->
+<button class="edubot-launcher" id="edubotLauncher" type="button" aria-label="Ask EduBot AI Assistant" title="Ask EduBot AI">
+    <div class="edubot-launcher-pulse"></div>
+    <span class="edubot-launcher-tooltip">Ask EduBot AI 💬</span>
+    
+    <div class="edubot-launcher-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>
+            <rect x="3" y="8" width="18" height="12" rx="4"/>
+            <circle cx="9" cy="13" r="1.5" fill="currentColor"/>
+            <circle cx="15" cy="13" r="1.5" fill="currentColor"/>
+            <path d="M10 17h4"/>
+        </svg>
+    </div>
+
+    <div class="edubot-launcher-close">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+    </div>
 </button>
 
-<!-- Chat Window -->
-<div class="edubot-window" id="edubotWindow" role="dialog" aria-label="EduBot Assistant">
+<!-- Chat Window Dialog -->
+<div class="edubot-container" id="edubotContainer" role="dialog" aria-label="EduBot AI Assistant" data-api="{$apiAttr}" data-suggestions="{$suggestionsAttr}">
+    <!-- Header -->
     <div class="edubot-header">
-        <div class="edubot-header-info">
-            <div class="edubot-avatar">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                    <line x1="8" y1="21" x2="16" y2="21"></line>
-                    <line x1="12" y1="17" x2="12" y2="21"></line>
+        <div class="edubot-header-profile">
+            <div class="edubot-avatar-wrap">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="7" width="18" height="13" rx="3"/>
+                    <path d="M16 3l-4 4-4-4"/>
+                    <circle cx="9" cy="13" r="1" fill="currentColor"/>
+                    <circle cx="15" cy="13" r="1" fill="currentColor"/>
                 </svg>
+                <div class="edubot-status-indicator"></div>
             </div>
-            <div class="edubot-header-text">
-                <h3>EduBot</h3>
-                <span><span class="edubot-status-dot"></span> Online</span>
+            <div class="edubot-header-details">
+                <h4>EduBot AI</h4>
+                <p>Website Guide & Academic Tutor</p>
             </div>
         </div>
-        <button class="edubot-close" id="edubotClose" aria-label="Close chat">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-        </button>
+        <div class="edubot-header-actions">
+            <button class="edubot-action-btn" id="edubotClearBtn" type="button" title="Clear Chat History">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18"></path>
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                </svg>
+            </button>
+            <button class="edubot-action-btn" id="edubotCloseBtn" type="button" title="Close Chat">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
     </div>
 
+    <!-- Messages Container -->
     <div class="edubot-messages" id="edubotMessages">
-        <div class="edubot-empty-state" id="edubotEmptyState">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-            <h4>Hi! I'm EduBot 👋</h4>
-            <p>Ask me anything about EduSys features, your classes, assignments, or education topics!</p>
+        <!-- Welcome Card -->
+        <div class="edubot-welcome" id="edubotWelcome">
+            <div class="edubot-welcome-badge">✨ AI Ready</div>
+            <h5>Hello, {$currentNameEscaped}! 👋</h5>
+            <p>I'm your EduSys assistant. Ask me anything about using the website, your classes, or any subject doubt!</p>
+            <div class="edubot-suggestions" id="edubotSuggestionsList"></div>
         </div>
 
-        <div class="edubot-typing" id="edubotTyping">
-            <div class="edubot-typing-dots">
+        <!-- Typing Indicator -->
+        <div class="edubot-typing-indicator" id="edubotTyping">
+            <div class="edubot-dots">
                 <span></span><span></span><span></span>
             </div>
-            <span>EduBot is typing...</span>
+            <span class="edubot-typing-label">EduBot is typing...</span>
         </div>
     </div>
 
-    <div class="edubot-input-area">
-        <div class="edubot-quick-actions" id="edubotQuickActions">
-            <button class="edubot-quick-btn" data-q="How do I join a live class?">Join Live Class</button>
-            <button class="edubot-quick-btn" data-q="How to submit an assignment?">Submit Assignment</button>
-            <button class="edubot-quick-btn" data-q="Where are my recordings?">View Recordings</button>
-            <button class="edubot-quick-btn" data-q="How to check my attendance?">Check Attendance</button>
-        </div>
-        <div class="edubot-input-row">
-            <div class="edubot-input-wrapper">
-                <textarea
-                    class="edubot-input"
-                    id="edubotInput"
-                    placeholder="Type your question..."
-                    rows="1"
-                    aria-label="Your message"
-                ></textarea>
-            </div>
-            <button class="edubot-send" id="edubotSend" aria-label="Send message">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Input Box -->
+    <div class="edubot-input-container">
+        <div class="edubot-input-box">
+            <textarea
+                class="edubot-textarea"
+                id="edubotInput"
+                placeholder="Ask any website question or subject doubt..."
+                rows="1"
+            ></textarea>
+            <button class="edubot-send-btn" id="edubotSendBtn" type="button" title="Send (Enter)">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
                     <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                 </svg>
             </button>
         </div>
+        <div class="edubot-footer-meta">
+           
+        </div>
     </div>
 </div>
 
-<script>
-// EduBot Chat Widget Logic
-(function() {
-    'use strict';
-
-    const STORAGE_KEY = 'edubot_conversation';
-    const API_URL = '<?= BASE_URL ?>php/chatbot_api.php';
-
-    // DOM Elements
-    const toggleBtn = document.getElementById('edubotToggle');
-    const windowEl = document.getElementById('edubotWindow');
-    const closeBtn = document.getElementById('edubotClose');
-    const messagesEl = document.getElementById('edubotMessages');
-    const emptyState = document.getElementById('edubotEmptyState');
-    const typingEl = document.getElementById('edubotTyping');
-    const inputEl = document.getElementById('edubotInput');
-    const sendBtn = document.getElementById('edubotSend');
-    const quickActions = document.getElementById('edubotQuickActions');
-    const badge = document.getElementById('edubotBadge');
-
-    // State
-    let conversation = [];
-    let isOpen = false;
-    let isTyping = false;
-
-    // Initialize
-    function init() {
-        loadConversation();
-        bindEvents();
-        updateBadge();
-    }
-
-    function loadConversation() {
-        try {
-            const stored = localStorage.getItem(STORAGE_KEY);
-            if (stored) {
-                conversation = JSON.parse(stored);
-                renderMessages();
-            }
-        } catch (e) {
-            conversation = [];
-        }
-    }
-
-    function saveConversation() {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversation));
-    }
-
-    function bindEvents() {
-        toggleBtn.addEventListener('click', toggleChat);
-        closeBtn.addEventListener('click', closeChat);
-        sendBtn.addEventListener('click', sendMessage);
-
-        inputEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        inputEl.addEventListener('input', autoResize);
-
-        quickActions.addEventListener('click', (e) => {
-            const btn = e.target.closest('.edubot-quick-btn');
-            if (btn) {
-                inputEl.value = btn.dataset.q;
-                autoResize();
-                sendMessage();
-            }
-        });
-
-        // Close on outside click
-        document.addEventListener('click', (e) => {
-            if (isOpen && !windowEl.contains(e.target) && !toggleBtn.contains(e.target)) {
-                closeChat();
-            }
-        });
-
-        // Escape key to close
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && isOpen) {
-                closeChat();
-            }
-        });
-    }
-
-    function autoResize() {
-        inputEl.style.height = 'auto';
-        inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
-    }
-
-    function toggleChat() {
-        isOpen ? closeChat() : openChat();
-    }
-
-    function openChat() {
-        isOpen = true;
-        windowEl.classList.add('open');
-        toggleBtn.classList.add('hidden');
-        inputEl.focus();
-        badge.style.opacity = '0';
-        badge.style.transform = 'scale(0)';
-        toggleBtn.classList.remove('has-notification');
-    }
-
-    function closeChat() {
-        isOpen = false;
-        windowEl.classList.remove('open');
-        toggleBtn.classList.remove('hidden');
-    }
-
-    function updateBadge() {
-        const unread = conversation.filter(m => m.role === 'bot' && !m.read).length;
-        if (unread > 0 && !isOpen) {
-            badge.textContent = unread > 9 ? '9+' : unread;
-            badge.style.opacity = '1';
-            badge.style.transform = 'scale(1)';
-            toggleBtn.classList.add('has-notification');
-        }
-    }
-
-    function addMessage(role, content) {
-        const msg = {
-            role,
-            content,
-            timestamp: Date.now(),
-            read: role === 'user'
-        };
-        conversation.push(msg);
-        saveConversation();
-        renderMessages();
-        updateBadge();
-        return msg;
-    }
-
-    function renderMessages() {
-        if (conversation.length === 0) {
-            emptyState.style.display = 'flex';
-            return;
-        }
-        emptyState.style.display = 'none';
-
-        // Keep empty state but append messages
-        messagesEl.innerHTML = '';
-        messagesEl.appendChild(emptyState);
-        emptyState.style.display = 'none';
-
-        conversation.forEach(msg => {
-            const el = createMessageElement(msg);
-            messagesEl.appendChild(el);
-        });
-
-        scrollToBottom();
-    }
-
-    function createMessageElement(msg) {
-        const div = document.createElement('div');
-        div.className = `edubot-message ${msg.role}`;
-
-        const avatarIcon = msg.role === 'bot'
-            ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>'
-            : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
-
-        div.innerHTML = `
-            <div class="edubot-message-avatar">${avatarIcon}</div>
-            <div class="edubot-message-content">${escapeHtml(msg.content)}</div>
-        `;
-
-        return div;
-    }
-
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    function scrollToBottom() {
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
-
-    function showTyping(show) {
-        isTyping = show;
-        typingEl.classList.toggle('show', show);
-        sendBtn.disabled = show;
-        if (show) scrollToBottom();
-    }
-
-    async function sendMessage() {
-        const text = inputEl.value.trim();
-        if (!text || isTyping) return;
-
-        // Add user message
-        addMessage('user', text);
-        inputEl.value = '';
-        inputEl.style.height = 'auto';
-        sendBtn.disabled = true;
-
-        // Show typing indicator
-        showTyping(true);
-
-        try {
-            const response = await fetch(API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: text,
-                    context: conversation.slice(-10)
-                })
-            });
-
-            const data = await response.json();
-
-            showTyping(false);
-
-            if (data.success) {
-                addMessage('bot', data.reply);
-            } else {
-                addMessage('bot', 'Sorry, I encountered an error. Please try again.');
-                console.error('Chatbot error:', data.msg);
-            }
-        } catch (error) {
-            showTyping(false);
-            addMessage('bot', 'Sorry, I\'m having trouble connecting. Please check your connection and try again.');
-            console.error('Chatbot fetch error:', error);
-        } finally {
-            sendBtn.disabled = false;
-        }
-    }
-
-    // Initialize when DOM ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
-})();
-</script>
+<script src="{$widgetBaseUrl}js/edubot.js"></script>
 HTML;

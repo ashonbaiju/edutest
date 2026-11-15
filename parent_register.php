@@ -180,5 +180,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     </div>
 </div>
+
+<!-- EduBot AI Assistant -->
+<?php require_once __DIR__ . '/includes/chatbot_widget.php'; echo $chatbotWidget; ?>
 </body>
 </html>

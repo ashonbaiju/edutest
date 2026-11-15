@@ -176,5 +176,8 @@ function togglePass(id) {
     input.type = input.type === 'password' ? 'text' : 'password';
 }
 </script>
+
+<!-- EduBot AI Assistant -->
+<?php require_once __DIR__ . '/includes/chatbot_widget.php'; echo $chatbotWidget; ?>
 </body>
 </html>

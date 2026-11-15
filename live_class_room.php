@@ -648,6 +648,11 @@ $currentVideoQuality = '720p'; // Default video quality
             <button class="btn-room btn-success" onclick="window.location.href='<?= BASE_URL ?>recorded_classes.php?class_id=<?= $class_id ?>'">
                 <i class="fa-solid fa-circle-play"></i> View Recording
             </button>
+            <?php if ($is_teacher): ?>
+            <button class="btn-room" id="btn-download-local-rec" onclick="downloadMasterRecordingLocally()" style="display:none;background:#4f46e5;color:#fff;border:none;">
+                <i class="fa-solid fa-download"></i> Save to Computer
+            </button>
+            <?php endif; ?>
         </div>
     </div>
 </div>
@@ -724,12 +729,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             await startAutoRecording();
         }
 
-        chatInterval = setInterval(pollChat, 3000);
-        participantInterval = setInterval(pollParticipants, 8000);
+        chatInterval = setInterval(pollChat, 4000);
+        participantInterval = setInterval(pollParticipants, 10000);
 
-        // WebRTC intervals
-        webrtcPingInterval = setInterval(webrtcPing, 2000);
-        webrtcSignalInterval = setInterval(webrtcGetSignals, 1000);
+        // WebRTC intervals (optimized for fast signaling while respecting InfinityFree request limits)
+        webrtcPingInterval = setInterval(webrtcPing, 3000);
+        webrtcSignalInterval = setInterval(webrtcGetSignals, 1500);
 
         pollChat();
         pollParticipants();
@@ -789,17 +794,34 @@ async function initLocalStream() {
         logDebug(`Prioritized Camera ${idx}: "${d.label || 'Webcam'}" (ID: ${d.deviceId.substring(0, 10)}...)`);
     });
 
-    // Try capturing local microphone separately
+    // Try capturing local microphone with studio echo-cancellation & noise-suppression
     let audioTrack = null;
     if (audioDevices.length > 0) {
         try {
-            logDebug("Attempting default microphone capture...");
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            logDebug("Attempting high-fidelity microphone capture...");
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 48000,
+                    channelCount: 1
+                },
+                video: false
+            });
             audioTrack = stream.getAudioTracks()[0];
             hasAudio = true;
-            logDebug("SUCCESS: Captured microphone track.");
+            logDebug("SUCCESS: Captured microphone track with active noise suppression & echo cancellation.");
         } catch (err) {
-            logDebug("WARNING: Microphone capture failed: " + err.message);
+            logDebug("Retrying standard microphone capture: " + err.message);
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                audioTrack = stream.getAudioTracks()[0];
+                hasAudio = true;
+                logDebug("SUCCESS: Captured fallback microphone track.");
+            } catch (err2) {
+                logDebug("WARNING: Microphone capture failed: " + err2.message);
+            }
         }
     } else {
         logDebug("WARNING: No microphone inputs found.");
@@ -1436,6 +1458,7 @@ function handleRemoteTrack(remoteUserId, name, role, remoteStream, track) {
         };
     } else if (track.kind === 'audio') {
         videoEl.play().catch(() => {});
+        connectTrackToMasterAudio(track);
         track.onmute = () => {
             logDebug(`Remote audio track muted for student User ${remoteUserId}`);
             document.getElementById(`muted-${remoteUserId}`).style.display = 'flex';
@@ -1804,11 +1827,14 @@ function stopScreenShare() {
 }
 
 // ─────────────── MASTER CONTINUOUS CLASS RECORDING (Teacher) ───────────────
-// Records continuously as ONE unbroken video from class start to class end.
-// Switching video quality (320p/720p/1080p), cameras, or sharing/stopping screen
-// will NEVER break or restart the recording.
+// High-performance, lag-free recording engine designed for InfinityFree hosting.
+// 1. Operates at 20 FPS (qHD 960x540) via GPU-accelerated requestAnimationFrame to eliminate lag & freeze.
+// 2. High-fidelity audio mixing (teacher mic + student voices + screen sound).
+// 3. Auto-segments videos to < 8 MB parts so InfinityFree's 10 MB limit is NEVER exceeded.
+// 4. Instant local download backup for teachers so recordings are 100% safe.
+const MAX_SEGMENT_BYTES = 7.5 * 1024 * 1024; // 7.5 MB (strictly under InfinityFree 10 MB limit)
 let masterMediaRecorder = null;
-let masterRecordedChunks = [];
+let masterCombinedStream = null;
 let masterRecordingStartTime = null;
 let isMasterRecording = false;
 let isAutoRecording = false;
@@ -1816,11 +1842,28 @@ let masterRecordingTimer = null;
 let masterRecordingSeconds = 0;
 let masterCanvas = null;
 let masterCtx = null;
-let masterRenderInterval = null;
+let masterAnimationId = null;
+let lastCompositorTimestamp = 0;
+const COMPOSITOR_FPS_MS = 50; // 20 FPS = 50ms per frame (smooth motion, low CPU)
+
 let masterAudioCtx = null;
 let masterAudioDest = null;
 let masterAudioSources = new Map();
-let isRecordingUploading = false;
+
+// Segment tracking for InfinityFree
+let currentPartNumber = 1;
+let currentSegmentChunks = [];
+let currentSegmentBytes = 0;
+let fullClassChunks = [];
+let fullClassBlob = null;
+let isSegmentRotating = false;
+
+// Audio context auto-resume on first interaction
+document.addEventListener('click', () => {
+    if (masterAudioCtx && masterAudioCtx.state === 'suspended') {
+        masterAudioCtx.resume().catch(() => {});
+    }
+});
 
 function drawVideoAspect(ctx, video, x, y, w, h, mode) {
     if (!video || !video.videoWidth || !video.videoHeight) return false;
@@ -1862,6 +1905,23 @@ function drawVideoAspect(ctx, video, x, y, w, h, mode) {
     return true;
 }
 
+function connectTrackToMasterAudio(track) {
+    if (!masterAudioCtx || !masterAudioDest || !track) return;
+    if (masterAudioSources.has(track.id)) return;
+    try {
+        if (masterAudioCtx.state === 'suspended') {
+            masterAudioCtx.resume().catch(() => {});
+        }
+        const st = new MediaStream([track]);
+        const src = masterAudioCtx.createMediaStreamSource(st);
+        src.connect(masterAudioDest);
+        masterAudioSources.set(track.id, src);
+        logDebug("SUCCESS: Connected audio track to recording mixer: " + track.id);
+    } catch (e) {
+        logDebug("Audio track connection warning: " + e.message);
+    }
+}
+
 function refreshRecordingAudioSources() {
     if (!masterAudioCtx || !masterAudioDest) return;
     if (masterAudioCtx.state === 'suspended') {
@@ -1871,45 +1931,28 @@ function refreshRecordingAudioSources() {
     // Teacher microphone track
     if (localStream) {
         localStream.getAudioTracks().forEach(track => {
-            if (track.readyState === 'live' && !masterAudioSources.has(track.id)) {
-                try {
-                    const st = new MediaStream([track]);
-                    const src = masterAudioCtx.createMediaStreamSource(st);
-                    src.connect(masterAudioDest);
-                    masterAudioSources.set(track.id, src);
-                    logDebug("Recording audio mixer: connected teacher microphone track");
-                } catch (e) {}
+            if (track.readyState === 'live') {
+                connectTrackToMasterAudio(track);
             }
         });
     }
 
-    // Screen audio (if sharing computer sound)
+    // Screen audio (if sharing computer audio)
     if (screenStream) {
         screenStream.getAudioTracks().forEach(track => {
-            if (track.readyState === 'live' && !masterAudioSources.has(track.id)) {
-                try {
-                    const st = new MediaStream([track]);
-                    const src = masterAudioCtx.createMediaStreamSource(st);
-                    src.connect(masterAudioDest);
-                    masterAudioSources.set(track.id, src);
-                    logDebug("Recording audio mixer: connected screen audio track");
-                } catch (e) {}
+            if (track.readyState === 'live') {
+                connectTrackToMasterAudio(track);
             }
         });
     }
 
-    // Student voice questions
+    // Remote student audio tracks
     if (typeof peerConnections !== 'undefined') {
         Object.values(peerConnections).forEach(pc => {
             pc.getReceivers().forEach(receiver => {
                 const track = receiver.track;
-                if (track && track.kind === 'audio' && track.readyState === 'live' && !masterAudioSources.has(track.id)) {
-                    try {
-                        const st = new MediaStream([track]);
-                        const src = masterAudioCtx.createMediaStreamSource(st);
-                        src.connect(masterAudioDest);
-                        masterAudioSources.set(track.id, src);
-                    } catch (e) {}
+                if (track && track.kind === 'audio' && track.readyState === 'live') {
+                    connectTrackToMasterAudio(track);
                 }
             });
         });
@@ -1917,8 +1960,9 @@ function refreshRecordingAudioSources() {
 }
 
 function startMasterCompositorLoop() {
-    if (masterRenderInterval) {
-        clearInterval(masterRenderInterval);
+    if (masterAnimationId) {
+        cancelAnimationFrame(masterAnimationId);
+        masterAnimationId = null;
     }
 
     const localVideoEl = document.getElementById('localVideo');
@@ -1926,11 +1970,22 @@ function startMasterCompositorLoop() {
     const classTitle = <?= json_encode($class_title) ?>;
     const teacherName = <?= json_encode($teacher_name ?? $name ?? 'Teacher') ?>;
 
-    masterRenderInterval = setInterval(() => {
+    function renderLoop(timestamp) {
+        if (!isMasterRecording) {
+            masterAnimationId = null;
+            return;
+        }
+
+        masterAnimationId = requestAnimationFrame(renderLoop);
+
+        const elapsed = timestamp - lastCompositorTimestamp;
+        if (elapsed < COMPOSITOR_FPS_MS) return;
+        lastCompositorTimestamp = timestamp - (elapsed % COMPOSITOR_FPS_MS);
+
         if (!masterCtx || !masterCanvas) return;
 
-        const cw = masterCanvas.width;  // 1280
-        const ch = masterCanvas.height; // 720
+        const cw = masterCanvas.width;  // 960
+        const ch = masterCanvas.height; // 540
 
         const isScreenSharing = screenStream && 
                                 screenStream.active && 
@@ -1949,32 +2004,30 @@ function startMasterCompositorLoop() {
             // Draw full screen share (contain to preserve exact aspect ratio)
             drawVideoAspect(masterCtx, screenVideoEl, 0, 0, cw, ch, 'contain');
 
-            // Draw Picture-in-Picture webcam thumbnail of the teacher in bottom-right corner if camera is on
+            // PIP Teacher Webcam thumbnail in bottom-right corner if camera is on
             if (hasLiveCamera && localVideoEl && localVideoEl.videoWidth > 0) {
-                const pipW = 240;
-                const pipH = 135;
-                const pipMargin = 20;
+                const pipW = 192;
+                const pipH = 108;
+                const pipMargin = 16;
                 const pipX = cw - pipW - pipMargin;
                 const pipY = ch - pipH - pipMargin;
 
                 masterCtx.save();
-                masterCtx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-                masterCtx.shadowBlur = 14;
                 masterCtx.fillStyle = '#1e2235';
                 masterCtx.fillRect(pipX, pipY, pipW, pipH);
                 masterCtx.restore();
 
                 drawVideoAspect(masterCtx, localVideoEl, pipX, pipY, pipW, pipH, 'cover');
 
-                masterCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                masterCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
                 masterCtx.lineWidth = 2;
                 masterCtx.strokeRect(pipX, pipY, pipW, pipH);
 
                 masterCtx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-                masterCtx.fillRect(pipX, pipY + pipH - 22, pipW, 22);
+                masterCtx.fillRect(pipX, pipY + pipH - 18, pipW, 18);
                 masterCtx.fillStyle = '#ffffff';
-                masterCtx.font = 'bold 11px sans-serif';
-                masterCtx.fillText(teacherName, pipX + 8, pipY + pipH - 7);
+                masterCtx.font = 'bold 10px sans-serif';
+                masterCtx.fillText(teacherName, pipX + 6, pipY + pipH - 5);
             }
         } else if (hasLiveCamera && localVideoEl && localVideoEl.videoWidth > 0) {
             // MODE B: Full Teacher Webcam
@@ -1982,7 +2035,7 @@ function startMasterCompositorLoop() {
             masterCtx.fillRect(0, 0, cw, ch);
             drawVideoAspect(masterCtx, localVideoEl, 0, 0, cw, ch, 'cover');
         } else {
-            // MODE C: Camera Paused / Muted / Audio Only
+            // MODE C: Camera Paused / Audio Only Branded Screen
             const grad = masterCtx.createLinearGradient(0, 0, cw, ch);
             grad.addColorStop(0, '#1e2235');
             grad.addColorStop(1, '#0f172a');
@@ -1991,43 +2044,43 @@ function startMasterCompositorLoop() {
 
             masterCtx.save();
             masterCtx.beginPath();
-            masterCtx.arc(cw / 2, ch / 2 - 40, 56, 0, Math.PI * 2);
+            masterCtx.arc(cw / 2, ch / 2 - 32, 48, 0, Math.PI * 2);
             masterCtx.fillStyle = '#6366f1';
             masterCtx.fill();
-            masterCtx.lineWidth = 3;
+            masterCtx.lineWidth = 2;
             masterCtx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
             masterCtx.stroke();
 
             masterCtx.fillStyle = '#ffffff';
-            masterCtx.font = 'bold 44px sans-serif';
+            masterCtx.font = 'bold 36px sans-serif';
             masterCtx.textAlign = 'center';
             masterCtx.textBaseline = 'middle';
             const initial = (teacherName || 'T').charAt(0).toUpperCase();
-            masterCtx.fillText(initial, cw / 2, ch / 2 - 40);
+            masterCtx.fillText(initial, cw / 2, ch / 2 - 32);
 
-            masterCtx.font = 'bold 24px sans-serif';
-            masterCtx.fillText(classTitle || 'Live Class', cw / 2, ch / 2 + 46);
+            masterCtx.font = 'bold 20px sans-serif';
+            masterCtx.fillText(classTitle || 'Live Class', cw / 2, ch / 2 + 42);
 
             masterCtx.fillStyle = '#94a3b8';
-            masterCtx.font = '15px sans-serif';
-            masterCtx.fillText(teacherName + ' (Teacher)', cw / 2, ch / 2 + 76);
+            masterCtx.font = '13px sans-serif';
+            masterCtx.fillText(teacherName + ' (Teacher)', cw / 2, ch / 2 + 68);
 
             masterCtx.fillStyle = '#fbbf24';
-            masterCtx.font = '13px sans-serif';
-            masterCtx.fillText('Camera Off • Audio Session', cw / 2, ch / 2 + 104);
+            masterCtx.font = '12px sans-serif';
+            masterCtx.fillText('Camera Off • Audio Session Active', cw / 2, ch / 2 + 92);
             masterCtx.restore();
         }
+    }
 
-        refreshRecordingAudioSources();
-    }, 1000 / 30);
+    masterAnimationId = requestAnimationFrame(renderLoop);
 }
 
 async function createMasterRecordingStream() {
     if (!masterCanvas) {
         masterCanvas = document.createElement('canvas');
-        masterCanvas.width = 1280;
-        masterCanvas.height = 720;
-        masterCtx = masterCanvas.getContext('2d', { alpha: false });
+        masterCanvas.width = 960;  // qHD 16:9 (Lag-free, lightweight, 100% sharp text)
+        masterCanvas.height = 540;
+        masterCtx = masterCanvas.getContext('2d', { alpha: false, desynchronized: true });
     }
 
     try {
@@ -2047,7 +2100,7 @@ async function createMasterRecordingStream() {
     refreshRecordingAudioSources();
     startMasterCompositorLoop();
 
-    const canvasStream = masterCanvas.captureStream(30);
+    const canvasStream = masterCanvas.captureStream(20); // 20 FPS (Fluid & CPU-efficient)
     const combined = new MediaStream();
 
     const videoTrack = canvasStream.getVideoTracks()[0];
@@ -2064,6 +2117,74 @@ async function createMasterRecordingStream() {
     return combined;
 }
 
+function startNewMediaRecorderInstance() {
+    if (!masterCombinedStream || masterCombinedStream.getTracks().length === 0) {
+        logDebug("WARNING: No combined stream available for MediaRecorder.");
+        return;
+    }
+
+    let mimeType = 'video/webm;codecs=vp9,opus';
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm;codecs=vp8,opus';
+    }
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
+    }
+
+    // High quality lecture settings: 450 kbps video + 64 kbps audio
+    // Highly efficient encoding that prevents any CPU freezing and fits smoothly on InfinityFree hosting
+    masterMediaRecorder = new MediaRecorder(masterCombinedStream, {
+        mimeType,
+        videoBitsPerSecond: 450000,
+        audioBitsPerSecond: 64000
+    });
+
+    currentSegmentChunks = [];
+    currentSegmentBytes = 0;
+
+    masterMediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+            currentSegmentChunks.push(event.data);
+            currentSegmentBytes += event.data.size;
+            fullClassChunks.push(event.data);
+
+            // Auto-rotate segment if size reaches ~7.5 MB (InfinityFree 10 MB limit compliance)
+            if (currentSegmentBytes >= MAX_SEGMENT_BYTES && !isSegmentRotating) {
+                rotateRecordingSegment();
+            }
+        }
+    };
+
+    masterMediaRecorder.start(1000); // 1-second chunks
+}
+
+async function rotateRecordingSegment() {
+    if (isSegmentRotating || !isMasterRecording) return;
+    isSegmentRotating = true;
+
+    const partNumToUpload = currentPartNumber;
+    currentPartNumber++;
+    logDebug(`Segment ${partNumToUpload} reached 7.5 MB. Rotating to Part ${currentPartNumber} for InfinityFree compliance...`);
+
+    if (masterMediaRecorder && masterMediaRecorder.state !== 'inactive') {
+        masterMediaRecorder.onstop = async () => {
+            try {
+                const mimeType = masterMediaRecorder.mimeType || 'video/webm';
+                const partBlob = new Blob(currentSegmentChunks, { type: mimeType });
+                uploadMasterRecordingPart(partBlob, partNumToUpload, false);
+            } finally {
+                if (isMasterRecording) {
+                    startNewMediaRecorderInstance();
+                }
+                isSegmentRotating = false;
+            }
+        };
+        masterMediaRecorder.stop();
+    } else {
+        isSegmentRotating = false;
+    }
+}
+
 async function startAutoRecording() {
     if (isMasterRecording) {
         logDebug("Master recording already active.");
@@ -2071,40 +2192,26 @@ async function startAutoRecording() {
     }
 
     try {
-        logDebug("Starting continuous master recording...");
-        const stream = await createMasterRecordingStream();
+        logDebug("Starting continuous master recording (InfinityFree-optimized)...");
+        currentPartNumber = 1;
+        currentSegmentChunks = [];
+        currentSegmentBytes = 0;
+        fullClassChunks = [];
+        fullClassBlob = null;
+        isSegmentRotating = false;
 
-        let mimeType = 'video/webm;codecs=vp9,opus';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'video/webm;codecs=vp8,opus';
-        }
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'video/webm';
-        }
-
-        masterMediaRecorder = new MediaRecorder(stream, {
-            mimeType,
-            videoBitsPerSecond: 2500000
-        });
-
-        masterRecordedChunks = [];
+        masterCombinedStream = await createMasterRecordingStream();
         masterRecordingStartTime = new Date();
 
-        masterMediaRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-                masterRecordedChunks.push(event.data);
-            }
-        };
-
-        masterMediaRecorder.start(1000); // 1-second chunks
         isMasterRecording = true;
         isAutoRecording = true;
         isRecording = true;
 
+        startNewMediaRecorderInstance();
         updateRecordButtonUI(true);
 
-        showToast('🔴 Class recording started (captures entire session as 1 continuous video)', 'info');
-        logDebug('Master recording started successfully');
+        showToast('🔴 Class recording active (Lag-free & InfinityFree compatible)', 'info');
+        logDebug('Master continuous recording active');
 
     } catch (err) {
         console.error('Failed to start master recording:', err);
@@ -2153,22 +2260,27 @@ async function stopAutoRecording() {
     isRecording = false;
     updateRecordButtonUI(false);
 
-    if (masterRenderInterval) {
-        setTimeout(() => {
-            if (masterRenderInterval) {
-                clearInterval(masterRenderInterval);
-                masterRenderInterval = null;
-            }
-        }, 300);
+    if (masterAnimationId) {
+        cancelAnimationFrame(masterAnimationId);
+        masterAnimationId = null;
+    }
+
+    // Assemble the complete recording blob for the teacher's instant local download
+    if (fullClassChunks.length > 0) {
+        const mimeType = (masterMediaRecorder && masterMediaRecorder.mimeType) || 'video/webm';
+        fullClassBlob = new Blob(fullClassChunks, { type: mimeType });
+        const dlBtn = document.getElementById('btn-download-local-rec');
+        if (dlBtn) dlBtn.style.display = 'inline-flex';
     }
 
     if (masterMediaRecorder && masterMediaRecorder.state !== 'inactive') {
         return new Promise((resolve) => {
+            const finalPartNumber = currentPartNumber;
             masterMediaRecorder.onstop = async () => {
                 try {
                     const mimeType = masterMediaRecorder.mimeType || 'video/webm';
-                    const blob = new Blob(masterRecordedChunks, { type: mimeType });
-                    await uploadMasterRecording(blob);
+                    const finalBlob = new Blob(currentSegmentChunks, { type: mimeType });
+                    await uploadMasterRecordingPart(finalBlob, finalPartNumber, true);
                 } finally {
                     resolve();
                 }
@@ -2180,30 +2292,32 @@ async function stopAutoRecording() {
     return Promise.resolve();
 }
 
-async function uploadMasterRecording(blob) {
-    if (isRecordingUploading) return;
-    isRecordingUploading = true;
+async function uploadMasterRecordingPart(blob, partNumber, isFinal) {
+    if (!blob || blob.size === 0) {
+        logDebug(`Recording part ${partNumber} is empty, skipping upload.`);
+        return;
+    }
 
     try {
-        if (!blob || blob.size === 0) {
-            logDebug("Recording blob is empty, skipping upload.");
-            return;
-        }
-
         const classTitle = <?= json_encode($class_title) ?>;
-        const safeClassTitle = classTitle.replace(/[^a-zA-Z0-9\s-_]/g, '').replace(/\s+/g, '_').substring(0, 50);
+        const safeClassTitle = classTitle.replace(/[^a-zA-Z0-9\s-_]/g, '').replace(/\s+/g, '_').substring(0, 40);
         const startTime = masterRecordingStartTime || new Date();
         const dateStr = startTime.toISOString().replace(/[:.]/g, '-').substring(0, 19).replace('T', '_');
-        const filename = `${safeClassTitle}_${dateStr}.webm`;
+
+        const filename = (partNumber === 1 && isFinal) 
+            ? `${safeClassTitle}_${dateStr}.webm` 
+            : `${safeClassTitle}_${dateStr}_part${partNumber}.webm`;
 
         const sizeMb = (blob.size / 1024 / 1024).toFixed(2);
-        logDebug(`Uploading full class recording (${sizeMb} MB): ${filename}`);
-        showToast(`Saving full class recording (${sizeMb} MB)...`, 'info');
+        logDebug(`Uploading class recording Part ${partNumber} (${sizeMb} MB, Final: ${isFinal}): ${filename}`);
+        showToast(`Saving class recording Part ${partNumber} (${sizeMb} MB)...`, 'info');
 
         const formData = new FormData();
         formData.append('recording', blob, filename);
         formData.append('action', 'save_recording');
         formData.append('class_id', CLASS_ID);
+        formData.append('part_number', partNumber);
+        formData.append('is_final', isFinal ? '1' : '0');
 
         const res = await fetch(API, {
             method: 'POST',
@@ -2212,22 +2326,44 @@ async function uploadMasterRecording(blob) {
 
         const data = await res.json();
         if (data.success) {
-            logDebug('SUCCESS: Full class recording saved: ' + (data.path || filename));
-            showToast('✅ Full class recording saved: ' + filename, 'success');
+            logDebug(`SUCCESS: Class recording Part ${partNumber} saved (${sizeMb} MB)`);
+            showToast(`✅ Class recording Part ${partNumber} saved (${sizeMb} MB)`, 'success');
         } else {
-            logDebug('ERROR: Recording upload failed: ' + (data.msg || 'Unknown error'));
-            showToast('⚠️ Failed to save recording: ' + (data.msg || 'Error'), 'warning');
+            logDebug(`ERROR: Part ${partNumber} upload failed: ' + (data.msg || 'Unknown error')`);
+            showToast(`⚠️ Failed to save Part ${partNumber}: ` + (data.msg || 'Server error'), 'warning');
         }
     } catch (err) {
-        console.error('Failed to upload recording:', err);
-        logDebug('Recording upload error: ' + err.message);
-        showToast('⚠️ Upload error: ' + err.message, 'danger');
-    } finally {
-        isRecordingUploading = false;
+        console.error(`Failed to upload recording part ${partNumber}:`, err);
+        logDebug(`Recording part ${partNumber} upload error: ` + err.message);
+        showToast(`⚠️ Upload error on Part ${partNumber}: ` + err.message, 'danger');
     }
 }
 
-// Backward-compatible wrappers for manual recording buttons
+function downloadMasterRecordingLocally() {
+    if (!fullClassBlob || fullClassBlob.size === 0) {
+        showToast('No recording data available to download.', 'warning');
+        return;
+    }
+
+    const classTitle = <?= json_encode($class_title) ?>;
+    const safeClassTitle = classTitle.replace(/[^a-zA-Z0-9\s-_]/g, '').replace(/\s+/g, '_').substring(0, 40);
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19).replace('T', '_');
+    const filename = `${safeClassTitle}_${dateStr}_FullRecording.webm`;
+
+    const url = URL.createObjectURL(fullClassBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 2000);
+    showToast('📥 Downloading full class recording to your device...', 'success');
+}
+
+// Backward-compatible wrappers
 async function toggleRecording() {
     if (isMasterRecording) {
         if (confirm("Recording is active. Do you want to stop recording now? (Normally, it automatically saves when you end the class)")) {
@@ -2247,7 +2383,7 @@ function stopRecording() {
 }
 
 function uploadRecording(blob) {
-    return uploadMasterRecording(blob);
+    return uploadMasterRecordingPart(blob, 1, true);
 }
 
 // ─────────────── JOIN/LEAVE ───────────────

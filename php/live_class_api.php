@@ -9,6 +9,15 @@ requireLogin();
 
 header('Content-Type: application/json');
 
+// Check for oversized payload dropped by server hosting limits (e.g. InfinityFree 10MB limit)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST) && empty($_FILES) && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+    echo json_encode([
+        'success' => false,
+        'msg' => 'Upload exceeded server size limit (10MB on InfinityFree). Recording is automatically split into smaller parts.'
+    ]);
+    exit;
+}
+
 $action    = $_POST['action'] ?? $_GET['action'] ?? '';
 $class_id  = (int)($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
 $uid       = $_SESSION['user_id'];
@@ -195,18 +204,24 @@ switch ($action) {
         break;
 
     // ----------------------------------------------------------------
-    // SAVE RECORDING
+    // SAVE RECORDING (Supports segmented parts < 10MB for InfinityFree)
     // ----------------------------------------------------------------
     case 'save_recording':
         // Accepts a file upload from MediaRecorder (webm blob)
-        if (!isset($_FILES['recording'])) { echo json_encode(['success' => false, 'msg' => 'No file uploaded']); exit; }
+        if (!isset($_FILES['recording'])) {
+            echo json_encode(['success' => false, 'msg' => 'No file uploaded or size exceeded server 10MB limit']);
+            exit;
+        }
 
         $upload_dir = __DIR__ . '/../uploads/recordings/';
         if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
 
+        $part_number = max(1, (int)($_POST['part_number'] ?? 1));
+        $is_final    = (int)($_POST['is_final'] ?? 1);
+
         // Use client-provided filename if available, otherwise generate one
         $clientFilename = basename($_FILES['recording']['name'] ?? '');
-        $filename = $clientFilename ? $clientFilename : ('class_' . $class_id . '_' . time() . '.webm');
+        $filename = $clientFilename ? $clientFilename : ('class_' . $class_id . '_' . time() . ($part_number > 1 ? ('_part' . $part_number) : '') . '.webm');
 
         // Ensure .webm extension
         if (pathinfo($filename, PATHINFO_EXTENSION) !== 'webm') {
@@ -219,26 +234,77 @@ switch ($action) {
         if (move_uploaded_file($_FILES['recording']['tmp_name'], $filepath)) {
             $size = filesize($filepath);
 
-            // Clean up any older fragmented recordings for this class to ensure one single class recording
-            $oldRecs = $conn->query("SELECT id, file_path FROM recordings WHERE class_id=$class_id");
-            if ($oldRecs && $oldRecs->num_rows > 0) {
-                while ($old = $oldRecs->fetch_assoc()) {
-                    if ($old['file_path'] !== $db_path) {
-                        $oldFile = __DIR__ . '/../' . $old['file_path'];
-                        if (file_exists($oldFile)) {
-                            @unlink($oldFile);
+            // If this is Part 1 of a new recording session, clean up previous recordings from older runs
+            if ($part_number === 1) {
+                $oldRecs = $conn->query("SELECT id, file_path FROM recordings WHERE class_id=$class_id");
+                if ($oldRecs && $oldRecs->num_rows > 0) {
+                    while ($old = $oldRecs->fetch_assoc()) {
+                        if ($old['file_path'] !== $db_path) {
+                            $oldFile = __DIR__ . '/../' . $old['file_path'];
+                            if (file_exists($oldFile)) {
+                                @unlink($oldFile);
+                            }
                         }
                     }
+                    $conn->query("DELETE FROM recordings WHERE class_id=$class_id");
                 }
-                $conn->query("DELETE FROM recordings WHERE class_id=$class_id");
             }
 
             $conn->query("INSERT INTO recordings (class_id, file_path, file_size) VALUES ($class_id, '$db_path', $size)");
-            // Update live_classes recording_url
-            $conn->query("UPDATE live_classes SET recording_url='$db_path' WHERE id=$class_id");
-            echo json_encode(['success' => true, 'path' => $db_path]);
+
+            // Update primary recording_url in live_classes (points to Part 1)
+            if ($part_number === 1) {
+                $conn->query("UPDATE live_classes SET recording_url='$db_path' WHERE id=$class_id");
+            }
+
+            echo json_encode([
+                'success'     => true,
+                'path'        => $db_path,
+                'part_number' => $part_number,
+                'is_final'    => $is_final,
+                'size'        => $size
+            ]);
         } else {
-            echo json_encode(['success' => false, 'msg' => 'Upload failed']);
+            echo json_encode(['success' => false, 'msg' => 'Upload failed to write to disk']);
+        }
+        break;
+
+    // ----------------------------------------------------------------
+    // CHUNKED UPLOAD (For ultra-resilient upload on InfinityFree)
+    // ----------------------------------------------------------------
+    case 'upload_recording_chunk':
+        $upload_id    = preg_replace('/[^a-zA-Z0-9_-]/', '', $_POST['upload_id'] ?? '');
+        $chunk_index  = (int)($_POST['chunk_index'] ?? 0);
+        $total_chunks = max(1, (int)($_POST['total_chunks'] ?? 1));
+        $filename     = preg_replace('/[^a-zA-Z0-9_.-]/', '', $_POST['filename'] ?? ('class_' . $class_id . '.webm'));
+
+        if (!$upload_id || !isset($_FILES['chunk'])) {
+            echo json_encode(['success' => false, 'msg' => 'Invalid chunk upload request']);
+            exit;
+        }
+
+        $temp_dir = __DIR__ . '/../uploads/recordings_temp/';
+        if (!is_dir($temp_dir)) mkdir($temp_dir, 0755, true);
+
+        $temp_path = $temp_dir . $upload_id . '.part';
+        $chunk_data = file_get_contents($_FILES['chunk']['tmp_name']);
+        file_put_contents($temp_path, $chunk_data, $chunk_index === 0 ? 0 : FILE_APPEND);
+
+        if ($chunk_index === $total_chunks - 1) {
+            $upload_dir = __DIR__ . '/../uploads/recordings/';
+            if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
+
+            $final_path = $upload_dir . $filename;
+            $db_path    = 'uploads/recordings/' . $filename;
+            rename($temp_path, $final_path);
+            $size = filesize($final_path);
+
+            $conn->query("INSERT INTO recordings (class_id, file_path, file_size) VALUES ($class_id, '$db_path', $size)");
+            $conn->query("UPDATE live_classes SET recording_url='$db_path' WHERE id=$class_id");
+
+            echo json_encode(['success' => true, 'completed' => true, 'path' => $db_path]);
+        } else {
+            echo json_encode(['success' => true, 'completed' => false, 'chunk' => $chunk_index]);
         }
         break;
 

@@ -8,7 +8,17 @@
 mysqli_report(MYSQLI_REPORT_OFF);
 
 // 1. Detection: Is this running on localhost?
-$is_localhost = ($_SERVER['SERVER_NAME'] == 'localhost' || $_SERVER['SERVER_ADDR'] == '127.0.0.1');
+$serverName = $_SERVER['SERVER_NAME'] ?? '';
+$httpHost   = $_SERVER['HTTP_HOST'] ?? '';
+$serverAddr = $_SERVER['SERVER_ADDR'] ?? '';
+
+$is_localhost = (
+    in_array($serverName, ['localhost', '127.0.0.1', '::1']) ||
+    in_array($serverAddr, ['127.0.0.1', '::1']) ||
+    strpos($httpHost, 'localhost') !== false ||
+    strpos($httpHost, '127.0.0.1') !== false ||
+    (php_sapi_name() === 'cli')
+);
 
 if ($is_localhost) {
     // --- LOCAL (XAMPP) SETTINGS ---

@@ -20,8 +20,9 @@ SET time_zone = "+00:00";
 --
 -- Database: `tuition_system`
 --
-CREATE DATABASE IF NOT EXISTS `tuition_system` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE `tuition_system`;
+-- Note: Select your database (e.g. if0_xxxx_edusys on InfinityFree) before importing this file
+-- CREATE DATABASE IF NOT EXISTS `tuition_system` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- USE `tuition_system`;
 
 -- --------------------------------------------------------
 

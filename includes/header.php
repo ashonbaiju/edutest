@@ -186,6 +186,9 @@ if ($role === 'teacher' && $current_page !== 'verify' && $current_page !== 'logo
                     <a href="<?= BASE_URL ?>admin/ai-predictions.php"
                         class="nav-link <?= $current_page === 'ai-predictions' ? 'active' : '' ?>"><i
                             class="fa-solid fa-brain"></i><span>AI Predictions</span></a>
+                    <a href="<?= BASE_URL ?>admin/ai-assistant.php"
+                        class="nav-link <?= $current_page === 'ai-assistant' ? 'active' : '' ?>"><i
+                            class="fa-solid fa-robot"></i><span>AI Chatbot & APIs</span></a>
                     <a href="<?= BASE_URL ?>admin/live-class-reports.php"
                         class="nav-link <?= $current_page === 'live-class-reports' ? 'active' : '' ?>"><i
                             class="fa-solid fa-video"></i><span>Live Classes</span></a>

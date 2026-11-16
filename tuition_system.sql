@@ -1653,6 +1653,44 @@ ALTER TABLE `test_questions`
 --
 ALTER TABLE `transactions`
   ADD CONSTRAINT `transactions_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `ai_settings`
+--
+
+CREATE TABLE IF NOT EXISTS `ai_settings` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `setting_key` varchar(60) NOT NULL UNIQUE,
+  `setting_value` text DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `ai_chat_logs`
+--
+
+CREATE TABLE IF NOT EXISTS `ai_chat_logs` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) DEFAULT NULL,
+  `user_role` varchar(20) DEFAULT 'guest',
+  `user_name` varchar(100) DEFAULT 'Guest',
+  `user_message` text DEFAULT NULL,
+  `bot_response` text DEFAULT NULL,
+  `provider` varchar(50) DEFAULT 'groq',
+  `model` varchar(100) DEFAULT NULL,
+  `status` enum('success','error') DEFAULT 'success',
+  `error_message` text DEFAULT NULL,
+  `latency_ms` int(11) DEFAULT 0,
+  `tokens_used` int(11) DEFAULT 0,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

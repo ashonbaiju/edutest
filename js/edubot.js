@@ -10,17 +10,26 @@
     const container = document.getElementById('edubotContainer');
     if (!launcher || !container) return;
 
-    function resolveChatbotApi() {
-        if (container.dataset && container.dataset.api) {
-            return container.dataset.api;
+    function getCandidateEndpoints() {
+        const candidates = [];
+        if (container.dataset && container.dataset.api && container.dataset.api.trim() !== '') {
+            candidates.push(container.dataset.api);
         }
         const pathname = window.location.pathname || '';
         if (pathname.includes('/edu/project/')) {
-            return '/edu/project/php/chatbot_api.php';
+            candidates.push('/edu/project/php/chatbot_api.php');
+        } else if (pathname.includes('/project/')) {
+            candidates.push('/project/php/chatbot_api.php');
         }
-        return '/php/chatbot_api.php';
+        candidates.push('/php/chatbot_api.php');
+        candidates.push('php/chatbot_api.php');
+        candidates.push('../php/chatbot_api.php');
+
+        // Return deduplicated list
+        return candidates.filter((item, index) => candidates.indexOf(item) === index);
     }
-    const apiEndpoint = resolveChatbotApi();
+
+    let activeApiEndpoint = (container.dataset && container.dataset.api) ? container.dataset.api : '';
     let suggestions = [];
     try {
         suggestions = JSON.parse(container.dataset.suggestions || '[]');
@@ -317,13 +326,32 @@
             formData.append('message', text);
             formData.append('context', JSON.stringify(history.slice(-8)));
 
-            const res = await fetch(apiEndpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: formData.toString()
-            });
+            const candidates = activeApiEndpoint ? [activeApiEndpoint] : getCandidateEndpoints();
+            let res = null;
+            let lastFetchErr = null;
+
+            for (const ep of candidates) {
+                try {
+                    const testRes = await fetch(ep, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded'
+                        },
+                        body: formData.toString()
+                    });
+                    if (testRes.status !== 404) {
+                        res = testRes;
+                        activeApiEndpoint = ep;
+                        break;
+                    }
+                } catch (epErr) {
+                    lastFetchErr = epErr;
+                }
+            }
+
+            if (!res) {
+                throw lastFetchErr || new Error('Unable to connect to AI assistant endpoint.');
+            }
 
             if (typingIndicator) {
                 typingIndicator.classList.remove('active');

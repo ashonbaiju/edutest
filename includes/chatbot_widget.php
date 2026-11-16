@@ -739,5 +739,5 @@ $chatbotWidget = <<<HTML
     </div>
 </div>
 
-<script src="{$widgetBaseUrl}js/edubot.js"></script>
+<script src="{$widgetBaseUrl}js/edubot.js?v=2.2"></script>
 HTML;

@@ -1,0 +1,16 @@
+{
+    "active_provider": "groq",
+    "is_enabled": 1,
+    "temperature": 0.7,
+    "max_tokens": 800,
+    "groq_api_key": "",
+    "groq_model": "openai/gpt-oss-120b",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-1.5-flash",
+    "deepseek_api_key": "",
+    "deepseek_model": "deepseek-chat",
+    "openai_api_key": "",
+    "openai_model": "gpt-4o-mini",
+    "custom_api_url": "",
+    "system_prompt": "You are 'EduBot', the intelligent and helpful AI assistant for the EduSys tuition & learning management platform.\nHelp students with academic questions and help users navigate the platform with polite, encouraging answers."
+}

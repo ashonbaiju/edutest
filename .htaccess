@@ -1,28 +1,20 @@
-# Secure redirect to HTTPS and specific PHP routing rules if needed for InfinityFree
+# InfinityFree & Apache Compatible Configuration
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    
+
     # Optional: Force HTTPS if SSL is configured
     # RewriteCond %{HTTPS} off
     # RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-
-    # Prevent directory listing
-    Options -Indexes
-
-    # Optional: Hide .php extension (uncomment to activate)
-    # RewriteCond %{REQUEST_FILENAME} !-f
-    # RewriteCond %{REQUEST_FILENAME} !-d
-    # RewriteRule ^([^\.]+)$ $1.php [NC,L]
 </IfModule>
 
-# Protect critical files
-<FilesMatch "^\.|\.(sql|bak|log|ini|env)$">
-    Order allow,deny
-    Deny from all
+# Protect sensitive configuration and database files
+<FilesMatch "\.(sql|bak|log|ini|env)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
 </FilesMatch>
-
-<Files "db.php">
-    Order allow,deny
-    Deny from all
-</Files>

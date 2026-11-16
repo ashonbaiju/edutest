@@ -9,6 +9,9 @@ if (session_status() === PHP_SESSION_NONE) {
 
 // Safely attempt DB connection for logging and custom settings
 $conn = null;
+if (!defined('DONT_DIE_ON_DB_ERROR')) {
+    define('DONT_DIE_ON_DB_ERROR', true);
+}
 if (file_exists(__DIR__ . '/../config/db.php')) {
     mysqli_report(MYSQLI_REPORT_OFF);
     try {
@@ -37,9 +40,16 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// Read input from standard POST or JSON payload
+// Read input from standard POST, base64 context, or JSON payload
 $message = trim($_POST['message'] ?? '');
 $rawContext = $_POST['context'] ?? null;
+
+if (!empty($_POST['context_b64'])) {
+    $decoded = @base64_decode($_POST['context_b64']);
+    if ($decoded) {
+        $rawContext = json_decode($decoded, true) ?: $rawContext;
+    }
+}
 
 if ($message === '') {
     $rawInput = file_get_contents('php://input');

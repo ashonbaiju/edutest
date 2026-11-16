@@ -48,6 +48,10 @@ $conn = new mysqli(DB_HOST, DB_USER, DB_PASS);
 
 // 4. Error Handling (Clean & Professional)
 if ($conn->connect_error) {
+    if (defined('DONT_DIE_ON_DB_ERROR')) {
+        $conn = null;
+        return;
+    }
     die("<div style='font-family:sans-serif; text-align:center; padding:50px;'>
             <h2 style='color:#f44336;'>⚠️ Database Connection Failed</h2>
             <p>Error: " . mysqli_connect_error() . "</p>
@@ -62,6 +66,10 @@ if ($is_localhost) {
 
 // 6. Select the Database
 if (!$conn->select_db(DB_NAME)) {
+    if (defined('DONT_DIE_ON_DB_ERROR')) {
+        $conn = null;
+        return;
+    }
     if ($is_localhost) {
         die("Failed to select database: " . $conn->error);
     } else {

@@ -17,12 +17,17 @@
         }
         const pathname = window.location.pathname || '';
         if (pathname.includes('/edu/project/')) {
+            candidates.push('/edu/project/chatbot_api.php');
             candidates.push('/edu/project/php/chatbot_api.php');
         } else if (pathname.includes('/project/')) {
+            candidates.push('/project/chatbot_api.php');
             candidates.push('/project/php/chatbot_api.php');
         }
+        candidates.push('/chatbot_api.php');
         candidates.push('/php/chatbot_api.php');
+        candidates.push('chatbot_api.php');
         candidates.push('php/chatbot_api.php');
+        candidates.push('../chatbot_api.php');
         candidates.push('../php/chatbot_api.php');
 
         // Return deduplicated list
@@ -324,22 +329,35 @@
         try {
             const formData = new URLSearchParams();
             formData.append('message', text);
-            formData.append('context', JSON.stringify(history.slice(-8)));
+            
+            // Base64 encode context to avoid hosting ModSecurity false positives on raw JSON
+            try {
+                const recentHistory = history.slice(-6);
+                if (recentHistory.length > 0) {
+                    formData.append('context_b64', btoa(unescape(encodeURIComponent(JSON.stringify(recentHistory)))));
+                }
+            } catch (b64Err) {
+                // If encoding fails, continue without context
+            }
 
-            const candidates = activeApiEndpoint ? [activeApiEndpoint] : getCandidateEndpoints();
+            const candidates = activeApiEndpoint ? [activeApiEndpoint, ...getCandidateEndpoints()] : getCandidateEndpoints();
             let res = null;
             let lastFetchErr = null;
+            let lastStatus = 0;
 
             for (const ep of candidates) {
                 try {
                     const testRes = await fetch(ep, {
                         method: 'POST',
+                        credentials: 'same-origin',
                         headers: {
                             'Content-Type': 'application/x-www-form-urlencoded'
                         },
                         body: formData.toString()
                     });
-                    if (testRes.status !== 404) {
+                    lastStatus = testRes.status;
+                    // If server responded with a non-404, non-403 status (or successful 200)
+                    if (testRes.status !== 404 && testRes.status !== 403) {
                         res = testRes;
                         activeApiEndpoint = ep;
                         break;
@@ -350,6 +368,9 @@
             }
 
             if (!res) {
+                if (lastStatus === 403) {
+                    throw new Error('Server returned 403 Forbidden. The hosting security proxy is blocking the request path. Trying alternative route...');
+                }
                 throw lastFetchErr || new Error('Unable to connect to AI assistant endpoint.');
             }
 

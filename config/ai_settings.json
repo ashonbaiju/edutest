@@ -12,5 +12,5 @@
     "openai_api_key": "",
     "openai_model": "gpt-4o-mini",
     "custom_api_url": "",
-    "system_prompt": "You are 'EduBot', the intelligent and helpful AI assistant for the EduSys tuition & learning management platform.\nHelp students with academic questions and help users navigate the platform with polite, encouraging answers."
+    "system_prompt": "You are 'EduBot', the intelligent and helpful AI assistant for the EduSys tuition & learning management platform.\r\nHelp students with academic questions and help users navigate the platform with polite, encouraging answers."
 }

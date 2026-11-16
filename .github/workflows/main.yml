@@ -4,19 +4,28 @@ on:
   push:
     branches:
       - main
+      - master
+  workflow_dispatch:
 
 jobs:
   web-deploy:
-    name: 🎉 Deploy
+    name: 🎉 Deploy to InfinityFree
     runs-on: ubuntu-latest
     steps:
     - name: 🚚 Get latest code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
     
     - name: 📂 Sync files to InfinityFree
-      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.5
       with:
-        server: ${{ secrets.FTP_SERVER }}
+        server: ${{ secrets.FTP_SERVER || 'ftpupload.net' }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
-        server-dir: /htdocs/
+        server-dir: htdocs/
+        exclude: |
+          **/.git*
+          **/.git*/**
+          **/.github/**
+          *.sql

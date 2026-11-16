@@ -9,6 +9,39 @@ if (!defined('BASE_URL')) {
     define('BASE_URL', '/project/');
 }
 
+// ── Self-contained EduBot AI API (bypasses InfinityFree standalone endpoint blocking) ──
+if (isset($_POST['action']) && $_POST['action'] === 'edubot_chat') {
+    require_once __DIR__ . '/ai_engine.php';
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Access-Control-Allow-Origin: *');
+
+    $message = trim($_POST['message'] ?? '');
+    $rawContext = $_POST['context'] ?? null;
+    if (!empty($_POST['context_b64'])) {
+        $decoded = @base64_decode($_POST['context_b64']);
+        if ($decoded) {
+            $rawContext = json_decode($decoded, true) ?: $rawContext;
+        }
+    }
+    if (is_string($rawContext)) {
+        $rawContext = json_decode($rawContext, true) ?: [];
+    }
+    $context = is_array($rawContext) ? $rawContext : [];
+
+    if ($message === '') {
+        echo json_encode(['success' => false, 'msg' => 'Message is required.']);
+        exit;
+    }
+
+    $userId = (int)($_SESSION['user_id'] ?? 0);
+    $userRole = $_SESSION['role'] ?? 'guest';
+    $userName = $_SESSION['name'] ?? 'Guest';
+
+    $response = executeAiChat($message, $context, $userRole, $userName, $conn ?? null, $userId);
+    echo json_encode($response);
+    exit;
+}
+
 function isLoggedIn() {
     return isset($_SESSION['user_id']);
 }

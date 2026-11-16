@@ -12,6 +12,12 @@
 
     function getCandidateEndpoints() {
         const candidates = [];
+        // 1. Current page URL (bypasses InfinityFree proxy blocks 100% reliably)
+        try {
+            const currentUrl = window.location.href.split('#')[0];
+            candidates.push(currentUrl);
+        } catch (e) {}
+
         if (container.dataset && container.dataset.api && container.dataset.api.trim() !== '') {
             candidates.push(container.dataset.api);
         }
@@ -23,12 +29,10 @@
             candidates.push('/project/chatbot_api.php');
             candidates.push('/project/php/chatbot_api.php');
         }
-        candidates.push('/chatbot_api.php');
-        candidates.push('/php/chatbot_api.php');
         candidates.push('chatbot_api.php');
+        candidates.push('/chatbot_api.php');
         candidates.push('php/chatbot_api.php');
-        candidates.push('../chatbot_api.php');
-        candidates.push('../php/chatbot_api.php');
+        candidates.push('/php/chatbot_api.php');
 
         // Return deduplicated list
         return candidates.filter((item, index) => candidates.indexOf(item) === index);
@@ -328,6 +332,7 @@
 
         try {
             const formData = new URLSearchParams();
+            formData.append('action', 'edubot_chat');
             formData.append('message', text);
             
             // Base64 encode context to avoid hosting ModSecurity false positives on raw JSON

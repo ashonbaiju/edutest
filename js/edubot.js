@@ -313,21 +313,29 @@
         scrollToBottom();
 
         try {
+            const formData = new URLSearchParams();
+            formData.append('message', text);
+            formData.append('context', JSON.stringify(history.slice(-8)));
+
             const res = await fetch(apiEndpoint, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
+                    'Content-Type': 'application/x-www-form-urlencoded'
                 },
-                body: JSON.stringify({
-                    message: text,
-                    context: history.slice(-8)
-                })
+                body: formData.toString()
             });
 
-            const data = await res.json();
             if (typingIndicator) {
                 typingIndicator.classList.remove('active');
+            }
+
+            const rawText = await res.text();
+            let data = null;
+            try {
+                data = JSON.parse(rawText);
+            } catch (jsonErr) {
+                console.error('EduBot non-JSON response:', rawText);
+                throw new Error(res.ok ? 'Unexpected response format from server.' : ('Server error (HTTP ' + res.status + ')'));
             }
 
             if (data && data.success && data.reply) {
@@ -342,7 +350,7 @@
             if (typingIndicator) {
                 typingIndicator.classList.remove('active');
             }
-            appendMessageDOM('bot', '⚠️ Connection error. Please check your network or try again.');
+            appendMessageDOM('bot', '⚠️ ' + (err.message || 'Connection error. Please try again.'));
             console.error('EduBot error:', err);
         } finally {
             isSending = false;

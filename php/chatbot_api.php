@@ -23,6 +23,15 @@ if (!defined('GROQ_FALLBACK_MODELS')) {
 }
 
 header('Content-Type: application/json; charset=UTF-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, X-Requested-With, Authorization');
+
+// Handle preflight OPTIONS request
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
 
 // Only accept POST requests
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -30,13 +39,23 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// Read input from either JSON payload or standard POST
-$rawInput = file_get_contents('php://input');
-$input = json_decode($rawInput, true);
-if (!is_array($input)) $input = [];
+// Read input from standard POST or JSON payload
+$message = trim($_POST['message'] ?? '');
+$rawContext = $_POST['context'] ?? null;
 
-$message = trim($input['message'] ?? $_POST['message'] ?? '');
-$context = $input['context'] ?? (isset($_POST['context']) ? (is_array($_POST['context']) ? $_POST['context'] : json_decode($_POST['context'], true)) : []);
+if ($message === '') {
+    $rawInput = file_get_contents('php://input');
+    $input = json_decode($rawInput, true);
+    if (is_array($input)) {
+        $message = trim($input['message'] ?? '');
+        $rawContext = $input['context'] ?? $rawContext;
+    }
+}
+
+if (is_string($rawContext)) {
+    $rawContext = json_decode($rawContext, true) ?: [];
+}
+$context = is_array($rawContext) ? $rawContext : [];
 
 if ($message === '') {
     echo json_encode(['success' => false, 'msg' => 'Message is required.']);
@@ -166,26 +185,30 @@ function callGroqWithFallbacks($messages) {
         return ['success' => false, 'msg' => 'Groq API key is not configured in config/ai.php.'];
     }
 
-    // Models to attempt in order
-    $modelsToTry = [];
+    // Models to attempt in order (must be verified active models on Groq)
+    $candidateModels = [];
     if (defined('GROQ_MODEL') && GROQ_MODEL) {
-        $modelsToTry[] = GROQ_MODEL;
+        $candidateModels[] = GROQ_MODEL;
     }
     if (defined('GROQ_FALLBACK_MODELS') && is_array(GROQ_FALLBACK_MODELS)) {
         foreach (GROQ_FALLBACK_MODELS as $fm) {
-            if (!in_array($fm, $modelsToTry)) {
-                $modelsToTry[] = $fm;
-            }
+            $candidateModels[] = $fm;
         }
     }
-    // Default safe fallbacks
-    if (!in_array('qwen/qwen3.8-27b', $modelsToTry)) {
-        $modelsToTry[] = 'qwen/qwen3.8-27b';
-    }
-    if (!in_array('openai/gpt-oss-120b', $modelsToTry)) {
-        $modelsToTry[] = 'openai/gpt-oss-120b';
+    // High-speed fallback
+    $candidateModels[] = 'qwen/qwen3.8-27b';
+    $candidateModels[] = 'openai/gpt-oss-120b';
+    $candidateModels[] = 'openai/gpt-oss-20b';
+
+    $modelsToTry = [];
+    foreach ($candidateModels as $m) {
+        if (!in_array($m, $modelsToTry) && !empty($m)) {
+            $modelsToTry[] = $m;
+        }
     }
 
+    // Try at most 2 models to stay safely within free hosting timeout limits
+    $modelsToTry = array_slice($modelsToTry, 0, 2);
     $lastError = 'Unknown error';
 
     foreach ($modelsToTry as $model) {
@@ -208,7 +231,7 @@ function sendGroqRequest($model, $messages, $apiKey) {
     $payload = [
         'model' => $model,
         'messages' => $messages,
-        'max_tokens' => 800,
+        'max_tokens' => 600,
         'temperature' => 0.7
     ];
 
@@ -219,9 +242,10 @@ function sendGroqRequest($model, $messages, $apiKey) {
         CURLOPT_POSTFIELDS => json_encode($payload),
         CURLOPT_HTTPHEADER => [
             'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey
+            'Authorization: Bearer ' . $apiKey,
+            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) EduBot/1.0'
         ],
-        CURLOPT_TIMEOUT => 12,
+        CURLOPT_TIMEOUT => 8,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false
     ]);
@@ -237,15 +261,18 @@ function sendGroqRequest($model, $messages, $apiKey) {
 
     $data = json_decode($response, true);
 
-    if ($httpCode !== 200 || !isset($data['choices'][0]['message']['content'])) {
+    if ($httpCode !== 200 || !isset($data['choices'][0]['message'])) {
         $errMsg = $data['error']['message'] ?? "HTTP {$httpCode}";
         return ['success' => false, 'msg' => "Model {$model} returned error: {$errMsg}"];
     }
 
-    $reply = trim($data['choices'][0]['message']['content']);
+    $msgObj = $data['choices'][0]['message'] ?? [];
+    $reply = trim($msgObj['content'] ?? '');
     if ($reply === '') {
-        // In case model responded into reasoning instead
-        $reply = trim($data['choices'][0]['message']['reasoning'] ?? 'I received your question. How can I assist you further?');
+        $reply = trim($msgObj['reasoning'] ?? '');
+    }
+    if ($reply === '') {
+        return ['success' => false, 'msg' => "Empty response from model {$model}"];
     }
 
     return [

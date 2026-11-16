@@ -1,9 +1,53 @@
-<?php
+  <?php
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../includes/auth.php';
 requireRole('admin');
 
 $me = $_SESSION['user_id'];
+
+// ── Self-contained Chat API (bypasses InfinityFree blocking) ──
+$action = $_POST['action'] ?? '';
+if ($action === 'fetch' || $action === 'send') {
+    header('Content-Type: application/json');
+
+    if ($action === 'fetch') {
+        $with = (int)($_POST['with'] ?? 0);
+        $batch_id = (int)($_POST['batch_id'] ?? 0);
+        if (!$with && !$batch_id) { echo json_encode(['error' => 'missing']); exit; }
+        if ($with) {
+            $conn->query("UPDATE messages SET is_read = 1 WHERE sender_id = $with AND receiver_id = $me");
+            $sql = "SELECT m.*, u.name as sender_name FROM messages m JOIN users u ON m.sender_id = u.id WHERE (m.sender_id = $me AND m.receiver_id = $with) OR (m.sender_id = $with AND m.receiver_id = $me) ORDER BY m.sent_at ASC";
+        } else {
+            $sql = "SELECT m.*, u.name as sender_name FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.batch_id = $batch_id ORDER BY m.sent_at ASC";
+        }
+        $res = $conn->query($sql);
+        $data = [];
+        if ($res) { while ($row = $res->fetch_assoc()) { $data[] = ['id' => $row['id'],'sender_id' => $row['sender_id'],'sender_name' => $row['sender_name'],'message' => $row['message'],'sent_at' => date('h:i A', strtotime($row['sent_at'])),'is_me' => ($row['sender_id'] == $me)]; } }
+        echo json_encode($data);
+        exit;
+    }
+
+    if ($action === 'send') {
+        $receiver = (int)($_POST['receiver_id'] ?? 0);
+        $batch_id = (int)($_POST['batch_id'] ?? 0);
+        $text = trim($_POST['message'] ?? '');
+        if (($receiver || $batch_id) && !empty($text)) {
+            if ($batch_id) {
+                $stmt = $conn->prepare("INSERT INTO messages (sender_id, receiver_id, batch_id, message) VALUES (?, NULL, ?, ?)");
+                $stmt->bind_param('iis', $me, $batch_id, $text);
+            } else {
+                $stmt = $conn->prepare("INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)");
+                $stmt->bind_param('iis', $me, $receiver, $text);
+            }
+            if ($stmt && $stmt->execute()) {
+                echo json_encode(['success' => true]);
+                exit;
+            }
+        }
+        echo json_encode(['success' => false]);
+        exit;
+    }
+}
 
 // All users (students + teachers) for contacts
 $contacts = $conn->query("

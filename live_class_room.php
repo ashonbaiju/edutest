@@ -1014,7 +1014,11 @@ async function webrtcPing() {
 
 async function webrtcGetSignals() {
     try {
-        const res = await fetch(`${API}?action=webrtc_get_signals&class_id=${CLASS_ID}`);
+        const res = await fetch(API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `action=webrtc_get_signals&class_id=${CLASS_ID}`
+        });
         const data = await res.json();
         if (data.success && data.signals && data.signals.length > 0) {
             for (let i = 0; i < data.signals.length; i++) {
@@ -2447,7 +2451,11 @@ function startTimer() {
 // ─────────────── CHAT ───────────────
 async function pollChat() {
     try {
-        const res = await fetch(`${API}?action=get_chat&class_id=${CLASS_ID}&since_id=${chatLastId}`);
+        const res = await fetch(API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `action=get_chat&class_id=${CLASS_ID}&since_id=${chatLastId}`
+        });
         const data = await res.json();
         if (data.success && data.messages.length) {
             data.messages.forEach(m => {
@@ -2497,7 +2505,11 @@ function chatKeyDown(e) {
 // ─────────────── PARTICIPANTS ───────────────
 async function pollParticipants() {
     try {
-        const res = await fetch(`${API}?action=get_participants&class_id=${CLASS_ID}`);
+        const res = await fetch(API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `action=get_participants&class_id=${CLASS_ID}`
+        });
         const data = await res.json();
         if (data.success) renderParticipants(data.participants);
     } catch(e) {}
@@ -2586,7 +2598,11 @@ function renderParticipants(list) {
 // ─────────────── DOUBTS ───────────────
 async function loadDoubts() {
     try {
-        const res = await fetch(`${API}?action=get_doubts&class_id=${CLASS_ID}`);
+        const res = await fetch(API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `action=get_doubts&class_id=${CLASS_ID}`
+        });
         const data = await res.json();
         if (data.success) renderDoubts(data.doubts);
     } catch(e) {}

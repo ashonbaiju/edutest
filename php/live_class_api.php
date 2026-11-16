@@ -148,7 +148,7 @@ switch ($action) {
     // GET CHAT MESSAGES (polling)
     // ----------------------------------------------------------------
     case 'get_chat':
-        $since_id = (int)($_GET['since_id'] ?? 0);
+        $since_id = (int)($_POST['since_id'] ?? $_GET['since_id'] ?? 0);
         $msgs = $conn->query("
             SELECT lm.id, lm.message, lm.created_at, u.name, u.role
             FROM live_messages lm

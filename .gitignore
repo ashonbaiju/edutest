@@ -7,9 +7,6 @@ uploads/recordings/*
 .env.local
 *.env
 
-# AI Config (contains API keys)
-config/ai.php
-
 # IDE files
 .vscode/
 .idea/

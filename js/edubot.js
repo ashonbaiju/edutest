@@ -10,7 +10,17 @@
     const container = document.getElementById('edubotContainer');
     if (!launcher || !container) return;
 
-    const apiEndpoint = container.dataset.api || '/edu/project/php/chatbot_api.php';
+    function resolveChatbotApi() {
+        if (container.dataset && container.dataset.api) {
+            return container.dataset.api;
+        }
+        const pathname = window.location.pathname || '';
+        if (pathname.includes('/edu/project/')) {
+            return '/edu/project/php/chatbot_api.php';
+        }
+        return '/php/chatbot_api.php';
+    }
+    const apiEndpoint = resolveChatbotApi();
     let suggestions = [];
     try {
         suggestions = JSON.parse(container.dataset.suggestions || '[]');
@@ -305,7 +315,10 @@
         try {
             const res = await fetch(apiEndpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
                 body: JSON.stringify({
                     message: text,
                     context: history.slice(-8)

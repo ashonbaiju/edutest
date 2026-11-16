@@ -13,8 +13,8 @@ if (!isLoggedIn()) {
 }
 
 $me   = $_SESSION['user_id'];
-$with = (int)($_GET['with'] ?? 0);
-$batch_id = (int)($_GET['batch_id'] ?? 0);
+$with = (int)($_POST['with'] ?? $_GET['with'] ?? 0);
+$batch_id = (int)($_POST['batch_id'] ?? $_GET['batch_id'] ?? 0);
 
 if (!$with && !$batch_id) {
     header('Content-Type: application/json');
